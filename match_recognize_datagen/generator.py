@@ -12,8 +12,6 @@ from .config import (
     DistributionType,
     PatternSpec,
 )
-from .pattern import PatternMatcher
-from .define import ConditionEvaluator, SelectivityApplier
 
 
 class DataGenerator:
@@ -38,9 +36,6 @@ class DataGenerator:
         """
         self.config = config
         self.rng = random.Random(seed)
-        self.pattern_matcher = (
-            PatternMatcher(config.pattern_spec) if config.pattern_spec else None
-        )
         self.attribute_by_name = {attr.name: attr for attr in config.attributes}
 
     def generate_full_table(self) -> pd.DataFrame:
@@ -196,33 +191,6 @@ class DataGenerator:
             attr, operator, condition_value, current_value
         )
 
-    def apply_pattern_constraints(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Apply PATTERN constraints to the generated table.
-        
-        This is a placeholder for complex pattern-based data generation.
-        Full implementation would:
-        - Identify rows matching pattern structure
-        - Ensure specific pattern occurrences
-        - Adjust target_num_matches if specified
-        
-        Args:
-            df: Generated DataFrame
-        
-        Returns:
-            DataFrame with pattern constraints applied
-        """
-        if not self.pattern_matcher:
-            return df
-
-        # TODO: Implement sophisticated pattern-based adjustment
-        # For now, return dataframe as-is
-        # In a full implementation, this would:
-        # 1. Identify matches of the pattern
-        # 2. Adjust data to ensure target_num_matches
-        # 3. Preserve pattern structure across batches
-
-        return df
 
     def apply_define_constraints(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -310,22 +278,17 @@ class DataGenerator:
         df = self.generate_full_table()
         print(f"✓ Generated full table: {len(df)} rows × {len(df.columns)} columns")
 
-        # Step 2: Apply pattern constraints
-        if self.pattern_matcher:
-            df = self.apply_pattern_constraints(df)
-            print(f"✓ Applied pattern constraints")
-
-        # Step 3: Apply DEFINE constraints
+        # Step 2: Apply DEFINE constraints
         if self.config.define_spec:
             df = self.apply_define_constraints(df)
             print(f"✓ Applied DEFINE constraints")
             # TODO DependentConditions need to be applied as well
 
-        # Step 4: Slice into batches
+        # Step 3: Slice into batches
         initial_table, batches = self.slice_into_batches(df)
         print(f"✓ Sliced into initial table & {len(batches)} batches")
 
-        # Step 5: Output files
+        # Step 4: Output files
         from .output import OutputWriter
         writer = OutputWriter(self.config)
         writer.write_initial_table(initial_table)

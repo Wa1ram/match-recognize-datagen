@@ -4,14 +4,13 @@ Core data generation logic for MATCH RECOGNIZE synthetic data.
 
 import random
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime, timedelta
 import pandas as pd
 from .config import (
     GeneratorConfig,
     AttributeType,
     DistributionType,
-    PatternSpec,
 )
+from .define import DefineConstraintApplier
 
 
 class DataGenerator:
@@ -36,7 +35,7 @@ class DataGenerator:
         """
         self.config = config
         self.rng = random.Random(seed)
-        self.attribute_by_name = {attr.name: attr for attr in config.attributes}
+        self.define_applier = DefineConstraintApplier(config, self.rng)
 
     def generate_full_table(self) -> pd.DataFrame:
         """
@@ -115,126 +114,9 @@ class DataGenerator:
             return "default"
         return self.rng.choice(attr.categories)
 
-    def _value_for_numerical_condition(self, attr, operator, condition_value, current_value):
-        """Generate a numerical value satisfying the comparison operator."""
-        try:
-            threshold = float(condition_value)
-        except (TypeError, ValueError):
-            return current_value
-
-        min_v = attr.min_value if attr.min_value is not None else threshold - 100
-        max_v = attr.max_value if attr.max_value is not None else threshold + 100
-
-        if operator.value == "=":
-            return max(min_v, min(max_v, threshold))
-        if operator.value == "<>":
-            candidate = self.rng.uniform(min_v, max_v)
-            if candidate == threshold:
-                candidate = min_v if threshold != min_v else max_v
-            return candidate
-        if operator.value == "<":
-            upper = min(max_v, threshold - 1e-6)
-            return min_v if upper <= min_v else self.rng.uniform(min_v, upper)
-        if operator.value == "<=":
-            upper = min(max_v, threshold)
-            return min_v if upper <= min_v else self.rng.uniform(min_v, upper)
-        if operator.value == ">":
-            lower = max(min_v, threshold + 1e-6)
-            return max_v if lower >= max_v else self.rng.uniform(lower, max_v)
-        if operator.value == ">=":
-            lower = max(min_v, threshold)
-            return max_v if lower >= max_v else self.rng.uniform(lower, max_v)
-
-        return current_value
-
-    def _value_for_categorical_condition(self, attr, operator, condition_value, current_value):
-        """Generate a categorical value satisfying the comparison operator."""
-        categories = attr.categories or []
-        if not categories:
-            return current_value
-
-        target = str(condition_value)
-
-        if operator.value == "=":
-            return target if target in categories else self.rng.choice(categories)
-
-        if operator.value == "<>":
-            candidates = [c for c in categories if c != target]
-            return self.rng.choice(candidates) if candidates else current_value
-
-        if operator.value == "<":
-            candidates = [c for c in categories if c < target]
-            return self.rng.choice(candidates) if candidates else current_value
-
-        if operator.value == "<=":
-            candidates = [c for c in categories if c <= target]
-            return self.rng.choice(candidates) if candidates else current_value
-
-        if operator.value == ">":
-            candidates = [c for c in categories if c > target]
-            return self.rng.choice(candidates) if candidates else current_value
-
-        if operator.value == ">=":
-            candidates = [c for c in categories if c >= target]
-            return self.rng.choice(candidates) if candidates else current_value
-
-        return current_value
-
-    def _value_satisfying_condition(self, attr, operator, condition_value, current_value):
-        """Generate a value for an attribute that satisfies an independent condition."""
-        if attr.attr_type == AttributeType.CATEGORICAL:
-            return self._value_for_categorical_condition(
-                attr, operator, condition_value, current_value
-            )
-
-        return self._value_for_numerical_condition(
-            attr, operator, condition_value, current_value
-        )
-
-
     def apply_define_constraints(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Apply DEFINE clause constraints to the generated table.
-        
-        This adjusts row values to satisfy selectivity probabilities
-        specified in conditions.
-        
-        Args:
-            df: Generated DataFrame
-        
-        Returns:
-            DataFrame with DEFINE constraints applied
-        """
-        if not self.config.define_spec:
-            return df
-
-        define_spec = self.config.define_spec
-        df_copy = df.copy()
-
-        # Apply independent conditions
-        for condition in define_spec.independent_conditions:
-            # Evaluate selectivity for every row in the table.
-            indices = range(len(df_copy))
-            attr_name = condition.attribute_name
-
-            if attr_name not in df_copy.columns:
-                continue
-
-            attr_cfg = self.attribute_by_name.get(attr_name)
-            if not attr_cfg:
-                continue
-
-            for idx in indices:
-                if self.rng.random() < condition.selectivity:
-                    current_value = df_copy.loc[idx, attr_name]
-                    df_copy.loc[idx, attr_name] = self._value_satisfying_condition(
-                        attr_cfg,
-                        condition.operator,
-                        condition.value,
-                        current_value,
-                    )
-
-        return df_copy
+        """Delegate DEFINE clause constraint application to DefineConstraintApplier."""
+        return self.define_applier.apply(df)
 
     def slice_into_batches(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, List[pd.DataFrame]]:
         """

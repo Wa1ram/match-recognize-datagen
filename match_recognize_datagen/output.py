@@ -118,26 +118,38 @@ class OutputWriter:
             f.write(f"-- Batch {filename_base}\n")
             f.write(f"-- {len(batch_df)} rows\n\n")
 
-            # Write INSERT statements
+            # Write one large INSERT statement containing all rows.
+            if batch_df.empty:
+                f.write(f"-- No rows to insert into {table_name}\n")
+                print(f"  Written: {filepath}")
+                return
+
+            columns = list(batch_df.columns)
+            value_rows = []
+
             for _, row in batch_df.iterrows():
-                columns = list(batch_df.columns)
                 values = []
 
                 for col in columns:
                     val = row[col]
-                    if isinstance(val, str):
-                        values.append(f"'{val}'")
-                    elif pd.isna(val):
+                    if pd.isna(val):
                         values.append("NULL")
+                    elif isinstance(val, str):
+                        escaped = val.replace("'", "''")
+                        values.append(f"'{escaped}'")
                     else:
                         values.append(str(val))
 
-                insert_stmt = (
-                    f"INSERT INTO {table_name} "
-                    f"({', '.join(columns)}) "
-                    f"VALUES ({', '.join(values)});"
-                )
-                f.write(insert_stmt + "\n")
+                value_rows.append(f"({', '.join(values)})")
+
+            insert_stmt = (
+                f"INSERT INTO {table_name} "
+                f"({', '.join(columns)}) "
+                f"VALUES\n  "
+                + ",\n  ".join(value_rows)
+                + ";\n"
+            )
+            f.write(insert_stmt)
 
         print(f"  Written: {filepath}")
 
@@ -165,6 +177,42 @@ class OutputWriter:
         elif format == "csv":
             filepath = os.path.join(output_dir, f"{filename}.csv")
             df.to_csv(filepath, index=False)
+        elif format == "sql":
+            filepath = os.path.join(output_dir, f"{filename}.sql")
+            table_name = "data_table"
+
+            with open(filepath, "w") as f:
+                f.write(f"-- Full table {filename}\n")
+                f.write(f"-- {len(df)} rows\n\n")
+
+                if df.empty:
+                    f.write(f"-- No rows to insert into {table_name}\n")
+                else:
+                    columns = list(df.columns)
+                    value_rows = []
+
+                    for _, row in df.iterrows():
+                        values = []
+                        for col in columns:
+                            val = row[col]
+                            if pd.isna(val):
+                                values.append("NULL")
+                            elif isinstance(val, str):
+                                escaped = val.replace("'", "''")
+                                values.append(f"'{escaped}'")
+                            else:
+                                values.append(str(val))
+
+                        value_rows.append(f"({', '.join(values)})")
+
+                    insert_stmt = (
+                        f"INSERT INTO {table_name} "
+                        f"({', '.join(columns)}) "
+                        f"VALUES\n  "
+                        + ",\n  ".join(value_rows)
+                        + ";\n"
+                    )
+                    f.write(insert_stmt)
         else:
             raise ValueError(f"Unknown format: {format}")
 

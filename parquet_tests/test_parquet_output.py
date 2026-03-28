@@ -13,6 +13,7 @@ from match_recognize_datagen import (
     AttributeType,
     ComparisonOperator,
     DataGenerator,
+    DependentConditionPair,
     DefineSpec,
     DistributionType,
     GeneratorConfig,
@@ -261,6 +262,112 @@ class TestParquetOutput(unittest.TestCase):
         ratio_eq_42 = (constrained["value"] == 42.0).mean()
         self.assertGreater(ratio_eq_42, 0.48)
         self.assertLess(ratio_eq_42, 0.52)
+
+    def test_pairwise_dependent_selectivity_is_applied(self):
+        cfg = GeneratorConfig(
+            initial_table_size=20,
+            total_rows=200,
+            num_columns=4,
+            batch_sizes=[90, 90],
+            rows_per_window=10,
+            attributes=[
+                AttributeConfig(
+                    name="value",
+                    attr_type=AttributeType.NUMERICAL,
+                    min_value=0,
+                    max_value=1000,
+                    distribution=DistributionType.UNIFORM,
+                ),
+                AttributeConfig(
+                    name="category",
+                    attr_type=AttributeType.CATEGORICAL,
+                    categories=["A", "B", "C"],
+                ),
+            ],
+            define_spec=DefineSpec(
+                pairwise_conditions=[
+                    DependentConditionPair(
+                        var1_name="V1",
+                        var2_name="V2",
+                        var1_attr="value",
+                        var2_attr="value",
+                        operator=ComparisonOperator.LTE,
+                        threshold=5.0,
+                        selectivity=0.25,
+                    )
+                ]
+            ),
+            output_dir=self.output_dir,
+            output_format="parquet",
+        )
+
+        generator = DataGenerator(cfg, seed=123)
+        constrained = generator.apply_define_constraints(generator.generate_full_table())
+
+        values = constrained["value"].tolist()
+        n = len(values)
+        total_pairs = n * (n - 1) // 2
+        satisfied_pairs = 0
+        for i in range(n):
+            for j in range(i + 1, n):
+                if abs(values[i] - values[j]) <= 5.0:
+                    satisfied_pairs += 1
+
+        expected_pairs = int(round(0.25 * total_pairs))
+        self.assertEqual(satisfied_pairs, expected_pairs)
+
+    def test_independent_selectivity_stays_stable_with_pairwise_overlap(self):
+        cfg = GeneratorConfig(             
+            initial_table_size=100,
+            total_rows=500,
+            num_columns=4,
+            batch_sizes=[200, 200],
+            rows_per_window=10,
+            attributes=[
+                AttributeConfig(
+                    name="value",
+                    attr_type=AttributeType.NUMERICAL,
+                    min_value=0,
+                    max_value=100,
+                    distribution=DistributionType.UNIFORM,
+                ),
+                AttributeConfig(
+                    name="category",
+                    attr_type=AttributeType.CATEGORICAL,
+                    categories=["A", "B", "C"],
+                ),
+            ],
+            define_spec=DefineSpec(
+                independent_conditions=[
+                    IndependentCondition(
+                        variable_name="V1",
+                        attribute_name="value",
+                        operator=ComparisonOperator.GTE,
+                        value=50.0,
+                        selectivity=0.4,
+                    )
+                ],
+                pairwise_conditions=[
+                    DependentConditionPair(
+                        var1_name="V1",
+                        var2_name="V2",
+                        var1_attr="value",
+                        var2_attr="value",
+                        operator=ComparisonOperator.LTE,
+                        threshold=5.0,
+                        selectivity=0.3,
+                    )
+                ],
+            ),
+            output_dir=self.output_dir,
+            output_format="parquet",
+        )
+
+        generator = DataGenerator(cfg, seed=123)
+        constrained = generator.apply_define_constraints(generator.generate_full_table())
+
+        ratio_ge_50 = (constrained["value"] >= 50.0).mean()
+        self.assertAlmostEqual(ratio_ge_50, 0.4, places=6)
 
 
 if __name__ == "__main__":

@@ -263,6 +263,58 @@ class TestParquetOutput(unittest.TestCase):
         self.assertGreater(ratio_eq_42, 0.48)
         self.assertLess(ratio_eq_42, 0.52)
 
+    def test_generation_directly_respects_multiple_independent_categorical_conditions(self):
+        cfg = GeneratorConfig(
+            initial_table_size=2000,
+            total_rows=20000,
+            num_columns=4,
+            batch_sizes=[9000, 9000],
+            rows_per_window=20,
+            attributes=[
+                AttributeConfig(
+                    name="value",
+                    attr_type=AttributeType.NUMERICAL,
+                    min_value=0,
+                    max_value=100,
+                    distribution=DistributionType.UNIFORM,
+                ),
+                AttributeConfig(
+                    name="category",
+                    attr_type=AttributeType.CATEGORICAL,
+                    categories=["A", "B", "C"],
+                ),
+            ],
+            define_spec=DefineSpec(
+                independent_conditions=[
+                    IndependentCondition(
+                        variable_name="V1",
+                        attribute_name="category",
+                        operator=ComparisonOperator.EQ,
+                        value="B",
+                        selectivity=0.60,
+                    ),
+                    IndependentCondition(
+                        variable_name="V2",
+                        attribute_name="category",
+                        operator=ComparisonOperator.NEQ,
+                        value="A",
+                        selectivity=0.90,
+                    ),
+                ]
+            ),
+            output_dir=self.output_dir,
+            output_format="parquet",
+        )
+
+        generator = DataGenerator(cfg, seed=123)
+        generated = generator.generate_full_table()
+
+        ratio_eq_b = (generated["category"] == "B").mean()
+        ratio_neq_a = (generated["category"] != "A").mean()
+
+        self.assertAlmostEqual(ratio_eq_b, 0.60, places=6)
+        self.assertAlmostEqual(ratio_neq_a, 0.90, places=6)
+
     def test_pairwise_dependent_selectivity_is_applied(self):
         cfg = GeneratorConfig(
             initial_table_size=20,

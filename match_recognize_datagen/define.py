@@ -222,6 +222,149 @@ class DefineConstraintApplier:
         return [(cat, p) for cat, p in category_probs.items()]
 
     @staticmethod
+    def _categorical_condition_satisfies(cat: str, op: str, target_value: str) -> bool:
+        if op == "=":
+            return cat == target_value
+        if op == "<>":
+            return cat != target_value
+        if op == "<":
+            return cat < target_value
+        if op == "<=":
+            return cat <= target_value
+        if op == ">":
+            return cat > target_value
+        if op == ">=":
+            return cat >= target_value
+        return False
+
+    def _solve_categorical_counts_exact(
+        self, categories: List[str], conditions: List[Any], total_rows: int
+    ) -> Optional[List[int]]:
+        """
+        Solve exact integer category counts for independent categorical conditions.
+
+        Each condition contributes a linear equality on counts:
+        sum(counts[cat] for satisfying cats) == round(selectivity * total_rows)
+        """
+        if total_rows < 0:
+            return None
+        n_cats = len(categories)
+        if n_cats == 0:
+            return None
+
+        masks: List[List[bool]] = []
+        targets: List[int] = []
+        for cond in conditions:
+            op = cond.operator.value
+            target_value = str(cond.value)
+            if op not in {"=", "<>", "<", "<=", ">", ">="}:
+                return None
+
+            # mask[i] tells whether categories[i] satisfies this condition.
+            mask = [
+                self._categorical_condition_satisfies(cat, op, target_value)
+                for cat in categories
+            ]
+            # Convert selectivity into an exact integer row target.
+            target = int(round(self._clamp01(cond.selectivity) * total_rows))
+            masks.append(mask)
+            targets.append(target)
+
+        # Trivial unconstrained case: uniform split with exact sum.
+        if not masks:
+            probs = [1.0 / n_cats] * n_cats
+            return self._largest_remainder_counts(probs, total_rows)
+
+        m = len(masks)
+
+        # Precompute whether remaining categories can satisfy / violate each mask.
+        suffix_has_sat = [[False] * (n_cats + 1) for _ in range(m)]
+        suffix_has_unsat = [[False] * (n_cats + 1) for _ in range(m)]
+        for j in range(m):
+            for i in range(n_cats - 1, -1, -1):
+                suffix_has_sat[j][i] = suffix_has_sat[j][i + 1] or masks[j][i]
+                suffix_has_unsat[j][i] = suffix_has_unsat[j][i + 1] or (not masks[j][i])
+
+        counts = [0] * n_cats
+        # Running sum of assigned satisfying counts per condition.
+        sat_sums = [0] * m
+
+        def feasible_bounds(cat_idx: int, count_here: int, remaining_after: int) -> bool:
+            # Fast pruning: check if each condition can still reach its target
+            # with the remaining unassigned rows.
+            for j in range(m):
+                assigned = sat_sums[j] + (count_here if masks[j][cat_idx] else 0)
+
+                if not suffix_has_sat[j][cat_idx + 1]:
+                    max_possible = assigned
+                else:
+                    max_possible = assigned + remaining_after
+
+                if not suffix_has_unsat[j][cat_idx + 1]:
+                    min_possible = assigned + remaining_after
+                else:
+                    min_possible = assigned
+
+                if targets[j] < min_possible or targets[j] > max_possible:
+                    return False
+            return True
+
+        def backtrack(cat_idx: int, remaining: int) -> bool:
+            # Base case: last category must take all remaining rows.
+            if cat_idx == n_cats - 1:
+                last = remaining
+                for j in range(m):
+                    final_sum = sat_sums[j] + (last if masks[j][cat_idx] else 0)
+                    if final_sum != targets[j]:
+                        return False
+                counts[cat_idx] = last
+                return True
+
+            for c in range(remaining + 1):
+                rem_after = remaining - c
+                if not feasible_bounds(cat_idx, c, rem_after):
+                    continue
+
+                # Tentatively assign c rows to this category.
+                counts[cat_idx] = c
+                changed = []
+                for j in range(m):
+                    if masks[j][cat_idx]:
+                        sat_sums[j] += c
+                        changed.append(j)
+
+                if backtrack(cat_idx + 1, rem_after):
+                    return True
+
+                # Undo tentative updates before trying next c.
+                for j in changed:
+                    sat_sums[j] -= c
+
+            return False
+
+        if not backtrack(0, total_rows):
+            return None
+
+        return counts
+
+    def _build_exact_values_for_categorical_conditions(
+        self, attr, conditions: List[Any], total_rows: int
+    ) -> Optional[List[str]]:
+        categories = attr.categories or []
+        if not categories:
+            return None
+
+        counts = self._solve_categorical_counts_exact(categories, conditions, total_rows)
+        if counts is None:
+            return None
+
+        values: List[str] = []
+        for cat, count in zip(categories, counts):
+            values.extend([cat] * count)
+        self.rng.shuffle(values)
+        return values
+
+    @staticmethod
     def _deterministic_values_in_interval(
         left: float, right: float, count: int
     ) -> List[float]:
@@ -297,6 +440,24 @@ class DefineConstraintApplier:
                 self._pre_generated_independent_attrs.add(attr_name)
 
             elif attr_cfg.attr_type == AttributeType.CATEGORICAL:
+                exact_values = self._build_exact_values_for_categorical_conditions(
+                    attr_cfg, conds, self.config.total_rows
+                )
+                if exact_values is not None:
+                    self._pre_generated_independent_values[attr_name] = exact_values
+                    self._pre_generated_independent_attrs.add(attr_name)
+
+                    # Keep a probability view for debugging/inspection compatibility.
+                    cat_counts: Dict[str, int] = {cat: 0 for cat in (attr_cfg.categories or [])}
+                    for value in exact_values:
+                        cat_counts[str(value)] = cat_counts.get(str(value), 0) + 1
+                    total = float(self.config.total_rows)
+                    self._independent_distributions[attr_name] = [
+                        (cat, cat_counts.get(cat, 0) / total)
+                        for cat in (attr_cfg.categories or [])
+                    ]
+                    continue
+
                 distribution = self._build_categorical_distribution(attr_cfg, conds)
                 if distribution is None:
                     continue

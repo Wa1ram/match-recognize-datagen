@@ -4,6 +4,7 @@ DEFINE constraint application logic.
 
 from __future__ import annotations
 
+import bisect
 import random
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -696,7 +697,128 @@ class DefineConstraintApplier:
 
         return groups
 
-    def _enforce_pairwise_condition(self, df: pd.DataFrame, condition) -> None:
+    def _pairwise_target_satisfied_pairs(self, condition, n_rows: int) -> Optional[int]:
+        if n_rows < 2:
+            return None
+        total_pairs = self._pair_count(n_rows)
+        if total_pairs == 0:
+            return None
+        target_selectivity = self._clamp_selectivity(condition.selectivity)
+        return int(round(target_selectivity * total_pairs))
+
+    def _pairwise_satisfied_count_exact(self, df: pd.DataFrame, condition) -> int:
+        left_attr = condition.var1_attr
+        right_attr = condition.var2_attr
+        values_left = df[left_attr].tolist()
+        values_right = df[right_attr].tolist()
+
+        n_rows = len(df)
+        satisfied = 0
+        for i in range(n_rows):
+            left_val = values_left[i]
+            for j in range(i + 1, n_rows):
+                if self._pair_condition_holds(
+                    left_val,
+                    values_right[j],
+                    condition.operator,
+                    condition.threshold,
+                ):
+                    satisfied += 1
+        return satisfied
+
+    def _sample_pair_indices(self, n_rows: int, sample_size: int) -> List[Tuple[int, int]]:
+        if n_rows < 2 or sample_size <= 0:
+            return []
+        pairs: List[Tuple[int, int]] = []
+        for _ in range(sample_size):
+            i = self.rng.randrange(n_rows)
+            j = self.rng.randrange(n_rows - 1)
+            if j >= i:
+                j += 1
+            if i > j:
+                i, j = j, i
+            pairs.append((i, j))
+        return pairs
+
+    def _pairwise_satisfied_count_on_samples(
+        self,
+        values_left: List[float],
+        values_right: List[float],
+        condition,
+        sampled_pairs: List[Tuple[int, int]],
+    ) -> int:
+        satisfied = 0
+        for i, j in sampled_pairs:
+            if self._pair_condition_holds(
+                values_left[i],
+                values_right[j],
+                condition.operator,
+                condition.threshold,
+            ):
+                satisfied += 1
+        return satisfied
+
+    def _locked_numerical_intervals_for_attribute(
+        self, attr_name: str, df: pd.DataFrame
+    ) -> Optional[List[Tuple[float, float]]]:
+        intervals: List[Tuple[float, float]] = []
+        dist = self._independent_distributions.get(attr_name)
+        if dist and isinstance(dist, list):
+            for entry in dist:
+                if (
+                    isinstance(entry, tuple)
+                    and len(entry) == 3
+                    and isinstance(entry[0], (int, float))
+                    and isinstance(entry[1], (int, float))
+                ):
+                    left = float(entry[0])
+                    right = float(entry[1])
+                    if right < left:
+                        continue
+                    intervals.append((left, right))
+        return intervals or None
+
+    def _rows_by_locked_interval(
+        self,
+        values: List[float],
+        intervals: List[Tuple[float, float]],
+    ) -> List[List[int]]:
+        if not intervals:
+            return []
+
+        boundaries = [right for _, right in intervals]
+        bins: List[List[int]] = [[] for _ in intervals]
+
+        for row_idx, value in enumerate(values):
+            pos = bisect.bisect_right(boundaries, value)
+            if pos <= 0:
+                bin_idx = 0
+            elif pos >= len(intervals):
+                bin_idx = len(intervals) - 1
+            else:
+                bin_idx = pos
+            bins[bin_idx].append(row_idx)
+        return bins
+
+    def _values_for_interval_shape(
+        self, left: float, right: float, count: int, gamma: float
+    ) -> List[float]:
+        if count <= 0:
+            return []
+        if right <= left:
+            return [left] * count
+
+        g = max(0.25, min(8.0, float(gamma)))
+        out: List[float] = []
+        width = right - left
+        for k in range(count):
+            t = (k + 0.5) / count
+            centered = (2.0 * t) - 1.0
+            transformed = 0.5 + 0.5 * (1.0 if centered >= 0.0 else -1.0) * (abs(centered) ** g)
+            out.append(left + (transformed * width))
+        return out
+
+    def _enforce_pairwise_condition_distance_groups(self, df: pd.DataFrame, condition) -> None:
         """
         Enforce pairwise selectivity using a distance-group construction.
 
@@ -727,12 +849,11 @@ class DefineConstraintApplier:
         except (TypeError, ValueError):
             return
 
-        total_pairs = self._pair_count(n_rows)
-        if total_pairs == 0:
+        target_satisfied_pairs = self._pairwise_target_satisfied_pairs(condition, n_rows)
+        if target_satisfied_pairs is None:
             return
 
-        target_selectivity = self._clamp_selectivity(condition.selectivity)
-        target_satisfied_pairs = int(round(target_selectivity * total_pairs))
+        total_pairs = self._pair_count(n_rows)
 
         operator_value = condition.operator.value
         supports_distance_mode = operator_value in {"<", "<=", ">", ">="}
@@ -780,6 +901,147 @@ class DefineConstraintApplier:
 
             cursor = end
             value_anchor += gap
+
+    def _enforce_pairwise_condition_locked_bins(self, df: pd.DataFrame, condition) -> None:
+        if condition.threshold is None:
+            return
+        if condition.var1_attr not in df.columns or condition.var2_attr not in df.columns:
+            return
+
+        operator_value = condition.operator.value
+        if operator_value not in {"<", "<=", ">", ">="}:
+            return
+
+        left_attr = condition.var1_attr
+        right_attr = condition.var2_attr
+
+        left_cfg = self.attribute_by_name.get(left_attr)
+        right_cfg = self.attribute_by_name.get(right_attr)
+        if not left_cfg or not right_cfg:
+            return
+        if left_cfg.attr_type != AttributeType.NUMERICAL or right_cfg.attr_type != AttributeType.NUMERICAL:
+            return
+
+        n_rows = len(df)
+        if n_rows < 2:
+            return
+
+        target_satisfied_pairs = self._pairwise_target_satisfied_pairs(condition, n_rows)
+        if target_satisfied_pairs is None:
+            return
+
+        adjustable_attr = left_attr
+        intervals = self._locked_numerical_intervals_for_attribute(adjustable_attr, df)
+
+        # If no independent-locking intervals exist, keep exact behavior with old constructor.
+        if not intervals:
+            self._enforce_pairwise_condition_distance_groups(df, condition)
+            return
+
+        adjustable_values = [float(v) for v in df[adjustable_attr].tolist()]
+        fixed_attr = right_attr
+
+        bins = self._rows_by_locked_interval(adjustable_values, intervals)
+        if not bins:
+            return
+
+        active_bins = [i for i, row_ids in enumerate(bins) if len(row_ids) >= 2]
+        if not active_bins:
+            return
+
+        # Stable per-bin row order for deterministic interval-internal reshaping.
+        row_order: List[List[int]] = []
+        for row_ids in bins:
+            ids = list(row_ids)
+            self.rng.shuffle(ids)
+            row_order.append(ids)
+
+        gammas = [1.0] * len(intervals)
+
+        total_pairs = self._pair_count(n_rows)
+        sample_size = min(total_pairs, 40000)
+        sampled_pairs = self._sample_pair_indices(n_rows, sample_size)
+        if not sampled_pairs:
+            return
+
+        fixed_values = [float(v) for v in df[fixed_attr].tolist()]
+        if adjustable_attr == fixed_attr:
+            right_values = adjustable_values
+        else:
+            right_values = fixed_values
+
+        current_satisfied = self._pairwise_satisfied_count_on_samples(
+            adjustable_values,
+            right_values,
+            condition,
+            sampled_pairs,
+        )
+        current_target_on_samples = int(round((target_satisfied_pairs / total_pairs) * sample_size))
+        current_error = abs(current_satisfied - current_target_on_samples)
+
+        max_iters = 240
+        for _ in range(max_iters):
+            choose_more_close = current_satisfied < current_target_on_samples
+            bin_idx = self.rng.choice(active_bins)
+            old_gamma = gammas[bin_idx]
+
+            if choose_more_close:
+                factor = self.rng.choice([1.15, 1.25, 1.4])
+            else:
+                factor = self.rng.choice([1.0 / 1.15, 1.0 / 1.25, 1.0 / 1.4])
+
+            new_gamma = max(0.25, min(8.0, old_gamma * factor))
+            if abs(new_gamma - old_gamma) < 1e-12:
+                continue
+
+            row_ids = row_order[bin_idx]
+            if not row_ids:
+                continue
+
+            old_values = [adjustable_values[idx] for idx in row_ids]
+            left, right = intervals[bin_idx]
+            shaped = self._values_for_interval_shape(left, right, len(row_ids), new_gamma)
+            self.rng.shuffle(shaped)
+            for idx, new_value in zip(row_ids, shaped):
+                adjustable_values[idx] = new_value
+
+            if adjustable_attr == fixed_attr:
+                right_values = adjustable_values
+
+            candidate_satisfied = self._pairwise_satisfied_count_on_samples(
+                adjustable_values,
+                right_values,
+                condition,
+                sampled_pairs,
+            )
+            candidate_error = abs(candidate_satisfied - current_target_on_samples)
+
+            if candidate_error <= current_error:
+                gammas[bin_idx] = new_gamma
+                current_satisfied = candidate_satisfied
+                current_error = candidate_error
+            else:
+                for idx, previous in zip(row_ids, old_values):
+                    adjustable_values[idx] = previous
+
+            if current_error == 0:
+                break
+
+        df[adjustable_attr] = adjustable_values
+
+    def _enforce_pairwise_condition(self, df: pd.DataFrame, condition) -> None:
+        if condition.threshold is None:
+            return
+
+        if condition.var1_attr not in df.columns or condition.var2_attr not in df.columns:
+            return
+
+        operator_value = condition.operator.value
+        if operator_value not in {"<", "<=", ">", ">="}:
+            return
+
+        # Prefer locked-bin optimization to preserve independent numerical selectivities.
+        self._enforce_pairwise_condition_locked_bins(df, condition)
 
     def _value_violating_condition(self, attr, operator, condition_value, current_value):
         """Generate a value that violates the given condition."""

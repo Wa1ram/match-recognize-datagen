@@ -176,7 +176,6 @@ class DataGenerator:
         if self.config.define_spec:
             df = self.apply_define_constraints(df)
             print(f"✓ Applied DEFINE constraints")
-            # TODO DependentConditions need to be applied as well
 
         # Step 3: Slice into batches
         initial_table, batches = self.slice_into_batches(df)

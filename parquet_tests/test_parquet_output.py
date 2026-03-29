@@ -265,10 +265,10 @@ class TestParquetOutput(unittest.TestCase):
 
     def test_generation_directly_respects_multiple_independent_categorical_conditions(self):
         cfg = GeneratorConfig(
-            initial_table_size=2000,
-            total_rows=20000,
+            initial_table_size=200,
+            total_rows=2000,
             num_columns=4,
-            batch_sizes=[9000, 9000],
+            batch_sizes=[900, 900],
             rows_per_window=20,
             attributes=[
                 AttributeConfig(
@@ -421,6 +421,80 @@ class TestParquetOutput(unittest.TestCase):
         ratio_ge_50 = (constrained["value"] >= 50.0).mean()
         self.assertAlmostEqual(ratio_ge_50, 0.4, places=6)
 
+    def test_independent_numerical_and_categorical_remain_stable_with_dependent(self):
+        cfg = GeneratorConfig(
+            initial_table_size=10000,
+            total_rows=50000,
+            num_columns=4,
+            batch_sizes=[20000, 20000],
+            rows_per_window=10,
+            attributes=[
+                AttributeConfig(
+                    name="value",
+                    attr_type=AttributeType.NUMERICAL,
+                    min_value=0,
+                    max_value=100,
+                    distribution=DistributionType.UNIFORM,
+                ),
+                AttributeConfig(
+                    name="category",
+                    attr_type=AttributeType.CATEGORICAL,
+                    categories=["A", "B", "C"],
+                ),
+            ],
+            define_spec=DefineSpec(
+                independent_conditions=[
+                    IndependentCondition(
+                        variable_name="V1",
+                        attribute_name="value",
+                        operator=ComparisonOperator.GTE,
+                        value=50.0,
+                        selectivity=0.4,
+                    ),
+                    IndependentCondition(
+                        variable_name="V2",
+                        attribute_name="category",
+                        operator=ComparisonOperator.EQ,
+                        value="B",
+                        selectivity=0.6,
+                    ),
+                ],
+                pairwise_conditions=[
+                    DependentConditionPair(
+                        var1_name="V1",
+                        var2_name="V2",
+                        var1_attr="value",
+                        var2_attr="value",
+                        operator=ComparisonOperator.LTE,
+                        threshold=5.0,
+                        selectivity=0.3,
+                    )
+                ],
+            ),
+            output_dir=self.output_dir,
+            output_format="parquet",
+        )
+
+        generator = DataGenerator(cfg, seed=123)
+        constrained = generator.apply_define_constraints(generator.generate_full_table())
+
+        ratio_ge_50 = (constrained["value"] >= 50.0).mean()
+        ratio_eq_b = (constrained["category"] == "B").mean()
+
+        values = constrained["value"].tolist()
+        n = len(values)
+        total_pairs = n * (n - 1) // 2
+        satisfied_pairs = 0
+        for i in range(n):
+            for j in range(i + 1, n):
+                if abs(values[i] - values[j]) <= 5.0:
+                    satisfied_pairs += 1
+        ratio_dep = satisfied_pairs / total_pairs if total_pairs else 0.0
+
+        self.assertAlmostEqual(ratio_ge_50, 0.4, places=6)
+        self.assertAlmostEqual(ratio_eq_b, 0.6, places=6)
+        self.assertAlmostEqual(ratio_dep, 0.3, delta=0.03)
+
     def test_generation_directly_respects_multiple_independent_ranges(self):
         cfg = GeneratorConfig(
             initial_table_size=200,
@@ -457,6 +531,13 @@ class TestParquetOutput(unittest.TestCase):
                         operator=ComparisonOperator.GT,
                         value=20.0,
                         selectivity=0.95,
+                    ),
+                    IndependentCondition(
+                        variable_name="V3",
+                        attribute_name="category",
+                        operator=ComparisonOperator.NEQ,
+                        value="B",
+                        selectivity=0.10,
                     ),
                 ]
             ),

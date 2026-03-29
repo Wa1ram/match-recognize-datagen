@@ -5,11 +5,11 @@ DEFINE constraint application logic.
 from __future__ import annotations
 
 import random
-from typing import Any, List
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
-from .config import AttributeType, GeneratorConfig
+from .config import AttributeType, DistributionType, GeneratorConfig
 
 
 class DefineConstraintApplier:
@@ -19,6 +19,299 @@ class DefineConstraintApplier:
         self.config = config
         self.rng = rng
         self.attribute_by_name = {attr.name: attr for attr in config.attributes}
+        
+        # Build distributions and pre-generated values for independent conditions
+        self._pre_generated_independent_values: Dict[str, List[Any]] = {}
+        self._pre_generated_independent_attrs: Set[str] = set()
+        self._independent_distributions: Dict[str, Any] = {}
+        self._build_all_independent_distributions()
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
+
+    @staticmethod
+    def _is_supported_inequality(operator_value: str) -> bool:
+        return operator_value in {"<", "<=", ">", ">=", "=", "<>"}
+
+    @staticmethod
+    def _largest_remainder_counts(probabilities: List[float], total: int) -> List[int]:
+        """Allocate integer counts with exact sum(total) using largest remainder."""
+        if total <= 0 or not probabilities:
+            return [0] * len(probabilities)
+
+        raw = [max(0.0, p) * total for p in probabilities]
+        base = [int(x) for x in raw]
+        remainder = total - sum(base)
+
+        if remainder > 0:
+            order = sorted(
+                range(len(raw)),
+                key=lambda i: (raw[i] - base[i]),
+                reverse=True,
+            )
+            for i in order[:remainder]:
+                base[i] += 1
+
+        return base
+
+    def _build_partition_distribution(
+        self, attr, conditions: List[Any]
+    ) -> Optional[List[Tuple[float, float, float]]]:
+        """
+        Build interval probability masses for one numerical attribute.
+
+        It fits a monotone CDF over condition thresholds so generated values satisfy
+        independent inequality selectivities as closely as possible.
+        """
+        if attr.min_value is None or attr.max_value is None:
+            return None
+
+        domain_min = float(attr.min_value)
+        domain_max = float(attr.max_value)
+        if domain_max <= domain_min:
+            return None
+
+        by_x: Dict[float, List[float]] = {
+            domain_min: [0.0],
+            domain_max: [1.0],
+        }
+        point_mass_targets: Dict[float, List[float]] = {}
+
+        for cond in conditions:
+            op = cond.operator.value
+            if not self._is_supported_inequality(op):
+                return None
+
+            try:
+                threshold = float(cond.value)
+            except (TypeError, ValueError):
+                return None
+
+            threshold = min(domain_max, max(domain_min, threshold))
+            sel = self._clamp01(cond.selectivity)
+
+            if op in {"<", "<="}:
+                by_x.setdefault(threshold, []).append(sel)
+            elif op in {">", ">="}:
+                by_x.setdefault(threshold, []).append(1.0 - sel)
+            elif op == "=":
+                point_mass_targets.setdefault(threshold, []).append(sel)
+                by_x.setdefault(threshold, [])
+            else:  # op == "<>"
+                point_mass_targets.setdefault(threshold, []).append(1.0 - sel)
+                by_x.setdefault(threshold, [])
+
+        xs = sorted(by_x.keys())
+        cdf: List[float] = []
+        for idx, x in enumerate(xs):
+            vals = by_x[x]
+            if vals:
+                cdf.append(self._clamp01(sum(vals) / len(vals)))
+            if x in point_mass_targets:
+                vals = point_mass_targets[x]
+                p_point = self._clamp01(sum(vals) / len(vals))
+                if not by_x[x]:
+                    # adjusting the p of interval up to point mass to be more uniform compared with the next interval, if not given [last threshold]<--p-->[point mass]
+                    vals_after = by_x[xs[idx+1]]
+                    p_after = self._clamp01(sum(vals_after) / len(vals_after))
+                    #scaling = (prob danach - prob point - prob davor) * abs(x_point- x_davor)/abs(x_danach-x_davor)
+                    scaling = (p_after - p_point - cdf[-1]) * abs((x - xs[idx-1])/(xs[idx+1]-xs[idx-1]))
+                    cdf.append(cdf[-1] + p_point + scaling)
+                else:
+                    cdf[-1] += self._clamp01(sum(vals) / len(vals))
+
+        cdf[0] = 0.0
+        cdf[-1] = 1.0
+        for i in range(1, len(cdf)):
+            cdf[i] = max(cdf[i], cdf[i - 1])
+        cdf[-1] = 1.0
+
+        point_p_by_x = {
+            x: self._clamp01(sum(targets) / len(targets))
+            for x, targets in point_mass_targets.items()
+            if targets
+        }
+
+        interval_entries: List[Tuple[float, float, float]] = []
+        for i in range(len(xs) - 1):
+            left = xs[i]
+            right = xs[i + 1]
+            if right < left:
+                continue
+            p = max(0.0, cdf[i + 1] - cdf[i])
+            point_p = point_p_by_x.get(right, 0.0)
+            if point_p > 0.0:
+                point_part = min(point_p, p)
+                interval_part = max(0.0, p - point_part)
+                if interval_part > 0.0:
+                    interval_entries.append((left, right, interval_part))
+                if point_part > 0.0:
+                    interval_entries.append((right, right, point_part))
+            else:
+                interval_entries.append((left, right, p))
+
+        total_p = sum(p for _, _, p in interval_entries)
+        if total_p <= 0.0:
+            return None
+        return [
+            (left, right, p / total_p)
+            for left, right, p in interval_entries
+            if p > 0.0
+        ]
+
+    def _build_categorical_distribution(
+        self, attr, conditions: List[Any]
+    ) -> Optional[List[Tuple[str, float]]]:
+        """
+        Build category probability masses for one categorical attribute.
+
+        It computes selectivity targets for each category based on conditions
+        and distributes probability accordingly.
+        """
+        categories = attr.categories or []
+        if not categories:
+            return None
+
+        # Map each category to its aggregate selectivity target
+        category_targets: Dict[str, List[float]] = {}
+        for cat in categories:
+            category_targets[cat] = []
+
+        for cond in conditions:
+            op = cond.operator.value
+            target_value = str(cond.value)
+            sel = self._clamp01(cond.selectivity)
+
+            # For each category, determine if it satisfies or violates the condition
+            for cat in categories:
+                if op == "=":
+                    satisfies = cat == target_value
+                elif op == "<>":
+                    satisfies = cat != target_value
+                elif op == "<":
+                    satisfies = cat < target_value
+                elif op == "<=":
+                    satisfies = cat <= target_value
+                elif op == ">":
+                    satisfies = cat > target_value
+                elif op == ">=":
+                    satisfies = cat >= target_value
+                else:
+                    return None
+
+                cdf_target = sel if satisfies else (1.0 - sel)
+                category_targets[cat].append(cdf_target)
+
+        # Average targets per category
+        category_probs = {}
+        for cat in categories:
+            if category_targets[cat]:
+                category_probs[cat] = self._clamp01(
+                    sum(category_targets[cat]) / len(category_targets[cat])
+                )
+            else:
+                category_probs[cat] = 1.0 / len(categories)
+
+        # Normalize probabilities
+        total_p = sum(category_probs.values())
+        if total_p <= 0:
+            return None
+
+        category_probs = {cat: p / total_p for cat, p in category_probs.items()}
+        return [(cat, p) for cat, p in category_probs.items()]
+
+    @staticmethod
+    def _deterministic_values_in_interval(
+        left: float, right: float, count: int
+    ) -> List[float]:
+        """Create deterministic values inside an interval."""
+        if count <= 0:
+            return []
+        if right <= left:
+            return [left] * count
+        step = (right - left) / count
+        return [left + (i + 0.5) * step for i in range(count)]
+
+    def _build_deterministic_values_for_numerical_distribution(
+        self,
+        distribution: List[Tuple[float, float, float]],
+        total_rows: int,
+    ) -> List[float]:
+        """Generate exact-count values from interval probabilities and shuffle them."""
+        probs = [p for _, _, p in distribution]
+        counts = self._largest_remainder_counts(probs, total_rows)
+
+        values: List[float] = []
+        for (left, right, _), count in zip(distribution, counts):
+            values.extend(self._deterministic_values_in_interval(left, right, count))
+
+        self.rng.shuffle(values)
+        return values
+
+    def _build_deterministic_values_for_categorical_distribution(
+        self,
+        distribution: List[Tuple[str, float]],
+        total_rows: int,
+    ) -> List[str]:
+        """Generate exact-count categorical values from probabilities and shuffle them."""
+        cats = [cat for cat, _ in distribution]
+        probs = [p for _, p in distribution]
+        counts = self._largest_remainder_counts(probs, total_rows)
+
+        values: List[str] = []
+        for cat, count in zip(cats, counts):
+            values.extend([cat] * count)
+
+        self.rng.shuffle(values)
+        return values
+
+    def _build_all_independent_distributions(self) -> None:
+        """Build distributions and pre-generate values for all supported independent conditions."""
+        if not self.config.define_spec:
+            return
+
+        # Group conditions by attribute
+        by_attr: Dict[str, List[Any]] = {}
+        for cond in self.config.define_spec.independent_conditions:
+            by_attr.setdefault(cond.attribute_name, []).append(cond)
+
+        for attr_name, conds in by_attr.items():
+            attr_cfg = next(
+                (a for a in self.config.attributes if a.name == attr_name), None
+            )
+            if not attr_cfg:
+                continue
+
+            if attr_cfg.attr_type == AttributeType.NUMERICAL:
+                distribution = self._build_partition_distribution(attr_cfg, conds)
+                if distribution is None:
+                    continue
+
+                self._independent_distributions[attr_name] = distribution
+                self._pre_generated_independent_values[attr_name] = (
+                    self._build_deterministic_values_for_numerical_distribution(
+                        distribution, self.config.total_rows
+                    )
+                )
+                self._pre_generated_independent_attrs.add(attr_name)
+
+            elif attr_cfg.attr_type == AttributeType.CATEGORICAL:
+                distribution = self._build_categorical_distribution(attr_cfg, conds)
+                if distribution is None:
+                    continue
+
+                self._independent_distributions[attr_name] = distribution
+                self._pre_generated_independent_values[attr_name] = (
+                    self._build_deterministic_values_for_categorical_distribution(
+                        distribution, self.config.total_rows
+                    )
+                )
+                self._pre_generated_independent_attrs.add(attr_name)
+
+    def get_pre_generated_independent_values(self) -> Dict[str, List[Any]]:
+        """Return the pre-generated independent values."""
+        return self._pre_generated_independent_values
 
     def _value_for_numerical_condition(self, attr, operator, condition_value, current_value):
         """Generate a numerical value satisfying the comparison operator."""
@@ -388,15 +681,16 @@ class DefineConstraintApplier:
         define_spec = self.config.define_spec
         df_copy = df.copy()
 
-        for condition in define_spec.independent_conditions:
-            self._enforce_independent_condition_exact(df_copy, condition)
+        # Independent conditions are already enforced during row generation
+        # (values are pre-generated in _build_all_independent_distributions).
+        # Only apply pairwise and reconcile after pairwise edits.
 
         for condition in define_spec.pairwise_conditions:
             self._enforce_pairwise_condition(df_copy, condition)
 
         # Reconcile independent conditions once more so pairwise edits cannot drift
         # the requested per-row selectivities.
-        for condition in define_spec.independent_conditions:
-            self._enforce_independent_condition_exact(df_copy, condition)
+        # for condition in define_spec.independent_conditions:
+        #     self._enforce_independent_condition_exact(df_copy, condition)
 
         return df_copy

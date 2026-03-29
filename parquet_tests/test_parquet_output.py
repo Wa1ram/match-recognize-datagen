@@ -369,6 +369,60 @@ class TestParquetOutput(unittest.TestCase):
         ratio_ge_50 = (constrained["value"] >= 50.0).mean()
         self.assertAlmostEqual(ratio_ge_50, 0.4, places=6)
 
+    def test_generation_directly_respects_multiple_independent_ranges(self):
+        cfg = GeneratorConfig(
+            initial_table_size=200,
+            total_rows=2000,
+            num_columns=4,
+            batch_sizes=[900, 900],
+            rows_per_window=20,
+            attributes=[
+                AttributeConfig(
+                    name="value",
+                    attr_type=AttributeType.NUMERICAL,
+                    min_value=0,
+                    max_value=100,
+                    distribution=DistributionType.UNIFORM,
+                ),
+                AttributeConfig(
+                    name="category",
+                    attr_type=AttributeType.CATEGORICAL,
+                    categories=["A", "B", "C"],
+                ),
+            ],
+            define_spec=DefineSpec(
+                independent_conditions=[
+                    IndependentCondition(
+                        variable_name="V1",
+                        attribute_name="value",
+                        operator=ComparisonOperator.EQ,
+                        value=50.0,
+                        selectivity=0.50,
+                    ),
+                    IndependentCondition(
+                        variable_name="V2",
+                        attribute_name="value",
+                        operator=ComparisonOperator.GT,
+                        value=20.0,
+                        selectivity=0.95,
+                    ),
+                ]
+            ),
+            output_dir=self.output_dir,
+            output_format="parquet",
+        )
+
+        generator = DataGenerator(cfg, seed=123)
+        generated = generator.generate_full_table()
+
+        ratio_eq_50 = (generated["value"] == 50.0).mean()
+        ratio_gt_20 = (generated["value"] > 20.0).mean()
+
+        self.assertGreater(ratio_eq_50, 0.46)
+        self.assertLess(ratio_eq_50, 0.54)
+        self.assertGreater(ratio_gt_20, 0.91)
+        self.assertLess(ratio_gt_20, 0.98)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

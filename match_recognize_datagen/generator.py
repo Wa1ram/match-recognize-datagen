@@ -3,7 +3,7 @@ Core data generation logic for MATCH RECOGNIZE synthetic data.
 """
 
 import random
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Set
 import pandas as pd
 from .config import (
     GeneratorConfig,
@@ -36,6 +36,10 @@ class DataGenerator:
         self.config = config
         self.rng = random.Random(seed)
         self.define_applier = DefineConstraintApplier(config, self.rng)
+        # Get pre-generated independent values from the applier
+        self._pre_generated_independent_values = (
+            self.define_applier.get_pre_generated_independent_values()
+        )
 
     def generate_full_table(self) -> pd.DataFrame:
         """
@@ -84,9 +88,17 @@ class DataGenerator:
                 jitter = self.rng.uniform(-0.1, 0.1)
                 row[attr.name] = max(0, base_time + jitter)
             elif attr.attr_type == AttributeType.NUMERICAL:
-                row[attr.name] = self._generate_numerical_attribute(attr)
+                pre_generated = self._pre_generated_independent_values.get(attr.name)
+                if pre_generated is not None:
+                    row[attr.name] = pre_generated[row_id - 1]
+                else:
+                    row[attr.name] = self._generate_numerical_attribute(attr)
             elif attr.attr_type == AttributeType.CATEGORICAL:
-                row[attr.name] = self._generate_categorical_attribute(attr)
+                pre_generated = self._pre_generated_independent_values.get(attr.name)
+                if pre_generated is not None:
+                    row[attr.name] = pre_generated[row_id - 1]
+                else:
+                    row[attr.name] = self._generate_categorical_attribute(attr)
 
         return row
 
@@ -158,7 +170,7 @@ class DataGenerator:
 
         # Step 1: Generate full table
         df = self.generate_full_table()
-        print(f"✓ Generated full table: {len(df)} rows × {len(df.columns)} columns")
+        print(f"✓ Generated full table: {len(df)} rows x {len(df.columns)} columns")
 
         # Step 2: Apply DEFINE constraints
         if self.config.define_spec:

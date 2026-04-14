@@ -28,6 +28,20 @@ full_table, batches = generator.generate()
 
 See `examples/examples.py` for more examples.
 
+## Insertion-First API (pattern_insertions_approach)
+
+This repository also includes an insertion-first generator API that models
+per-variable/per-column distributions as weighted rules (`exact` and `range`).
+
+Run the example:
+
+```bash
+python examples/pattern_insertions_example.py
+```
+
+The example demonstrates `config_a/config_b` style configs and dependent
+distance constraints with retry-and-shortfall reporting.
+
 ## Features
 
 - **PATTERN clause**: Variables, wildcards, Kleene+ operators

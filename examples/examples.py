@@ -8,6 +8,14 @@ This demonstrates how to:
 4. Output to Parquet files
 """
 
+from pathlib import Path
+import sys
+
+# Allow running this file directly without installing the package.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from match_recognize_datagen import (
     GeneratorConfig,
     AttributeConfig,
@@ -31,10 +39,10 @@ def example_basic_generation():
     print("-" * 50)
 
     config = GeneratorConfig(
-        initial_table_size=100,
-        total_rows=500,
+        initial_table_size=1_000_000,
+        total_rows=4_000_000,
         num_columns=4,
-        batch_sizes=[100, 100, 100],
+        batch_sizes=[1_000_000, 1_000_000, 1_000_000],
         rows_per_window=50,
         pattern_window_size=300.0,  # 50 rows spread over 300 seconds
         attributes=[
@@ -51,7 +59,7 @@ def example_basic_generation():
                 categories=["Electronics", "Clothing", "Food"],
             ),
         ],
-        output_dir="./output/example1",
+        output_dir="./ex_output/example1",
     )
 
     generator = DataGenerator(config, seed=42)
@@ -141,10 +149,10 @@ def example_with_conditions():
     )
 
     config = GeneratorConfig(
-        initial_table_size=150,
-        total_rows=750,
+        initial_table_size=1500_000,
+        total_rows=7500_000,
         num_columns=5,
-        batch_sizes=[200, 200, 200],
+        batch_sizes=[2000_000, 2000_000, 2000_000],
         rows_per_window=75,
         pattern_window_size=450.0,  # 75 rows spread over 450 seconds
         define_spec=define_spec,
@@ -162,7 +170,7 @@ def example_with_conditions():
                 categories=["active", "inactive", "pending"],
             ),
         ],
-        output_dir="./output/example3",
+        output_dir="./ex_output/example3",
     )
 
     generator = DataGenerator(config, seed=42)
@@ -238,8 +246,8 @@ def example_full_specification():
 
 
 if __name__ == "__main__":
-    example_basic_generation()
-    example_with_pattern()
+    #example_basic_generation()
+    # example_with_pattern()
     example_with_conditions()
-    example_full_specification()
+    # example_full_specification()
     print("All examples completed!")

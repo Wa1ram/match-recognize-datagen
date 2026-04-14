@@ -14,4 +14,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["match_recognize_datagen"]
+packages = ["match_recognize_datagen", "pattern_insertions_approach"]

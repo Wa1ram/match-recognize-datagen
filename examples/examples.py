@@ -40,7 +40,7 @@ def example_basic_generation():
         num_columns=4,
         batch_sizes=[1_000_000, 1_000_000, 1_000_000],
         rows_per_window=50,
-        pattern_window_size=300.0,  # 50 rows spread over 300 seconds
+        time_window_size=300.0,  # 50 rows spread over 300 seconds
         attributes=[
             AttributeConfig(
                 name="price",
@@ -86,7 +86,7 @@ def example_with_independent_conditions():
         num_columns=5,
         batch_sizes=[200, 200, 200],
         rows_per_window=100,
-        pattern_window_size=600.0,  # 100 rows spread over 600 seconds
+        time_window_size=600.0,  # 100 rows spread over 600 seconds
         define_spec=define_spec,
         attributes=[
             AttributeConfig(
@@ -139,7 +139,7 @@ def example_with_conditions():
         num_columns=5,
         batch_sizes=[200_000, 200_000, 200_000],
         rows_per_window=75,
-        pattern_window_size=450.0,  # 75 rows spread over 450 seconds
+        time_window_size=450.0,  # 75 rows spread over 450 seconds
         define_spec=define_spec,
         attributes=[
             AttributeConfig(
@@ -204,7 +204,7 @@ def example_full_specification():
         num_columns=6,
         batch_sizes=[250, 250, 250],
         rows_per_window=125,
-        pattern_window_size=1200.0,  # 125 rows spread over 1200 seconds
+        time_window_size=1200.0,  # 125 rows spread over 1200 seconds
         define_spec=define_spec,
         attributes=[
             AttributeConfig(

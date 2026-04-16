@@ -210,7 +210,7 @@ class RunConfig:
     define: DefineConfig
     batch_plan: BatchPlan
     rows_per_window: int
-    pattern_window_size: float = 300.0
+    time_window_size: float = 300.0
     space: SpaceConfig = field(default_factory=SpaceConfig)
     output: OutputConfig = field(default_factory=lambda: OutputConfig(output_dir="./output"))
     id_column_name: str = "id"
@@ -220,8 +220,8 @@ class RunConfig:
     def __post_init__(self):
         if self.rows_per_window <= 0:
             raise ValueError("rows_per_window must be > 0")
-        if self.pattern_window_size <= 0:
-            raise ValueError("pattern_window_size must be > 0")
+        if self.time_window_size <= 0:
+            raise ValueError("time_window_size must be > 0")
 
         col_names = {c.name for c in self.columns}
         col_by_name = {c.name: c for c in self.columns}

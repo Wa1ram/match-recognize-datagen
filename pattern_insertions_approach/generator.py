@@ -261,8 +261,8 @@ class PatternInsertionGenerator:
         pos_in_window = self._row_index % self.config.rows_per_window
         self._row_index += 1
 
-        window_start = window_idx * self.config.pattern_window_size
-        timestamp = window_start + (pos_in_window / self.config.rows_per_window) * self.config.pattern_window_size
+        window_start = window_idx * self.config.time_window_size
+        timestamp = window_start + (pos_in_window / self.config.rows_per_window) * self.config.time_window_size
 
         return {
             self.config.id_column_name: row_id,

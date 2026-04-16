@@ -78,11 +78,11 @@ class DataGenerator:
                 pos_in_window = (row_id - 1) % self.config.rows_per_window
                 
                 # Distribute rows evenly within each window.
-                window_start = window_idx * self.config.pattern_window_size
-                window_end = (window_idx + 1) * self.config.pattern_window_size
+                window_start = window_idx * self.config.time_window_size
+                window_end = (window_idx + 1) * self.config.time_window_size
                 
                 # Uniform distribution within window
-                base_time = window_start + (pos_in_window / self.config.rows_per_window) * self.config.pattern_window_size
+                base_time = window_start + (pos_in_window / self.config.rows_per_window) * self.config.time_window_size
                 # Add small jitter to simulate realistic data
                 jitter = self.rng.uniform(-0.1, 0.1)
                 row[attr.name] = max(0, base_time + jitter)

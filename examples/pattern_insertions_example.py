@@ -38,13 +38,24 @@ def main() -> None:
         Rule(type=RuleType.RANGE, min=10, max=50, probability=1.0),
     ]
 
+    config_categorical = [
+        Rule(type=RuleType.EXACT, value="A", probability=.6),
+        Rule(type=RuleType.EXACT, value="C", probability=.4),
+    ]
+
     columns = [
         ColumnConfig(name="value", column_type=ColumnType.NUMERICAL, min_value=0, max_value=100),
         ColumnConfig(name="kind", column_type=ColumnType.CATEGORICAL, categories=["A", "B", "C"]),
     ]
 
     variables = {
-        "V1": VariableConfig(name="V1", column_distributions={"value": config_a}),
+        "V1": VariableConfig(
+            name="V1",
+            column_distributions={
+                "value": config_a,
+                "kind": config_categorical,
+            },
+        ),
         "V2": VariableConfig(
             name="V2",
             kleene=KleeneConfig(min_length=1, max_length=3),
@@ -77,7 +88,7 @@ def main() -> None:
         define=define,
         batch_plan=BatchPlan(insertions_per_batch=[5, 5]),
         rows_per_window=10,
-        pattern_window_size=120.0,
+        time_window_size=120.0,
         space=SpaceConfig(before_first_variable=1, after_last_variable=2),
         output=OutputConfig(output_dir="./ex_output/pattern_insertions", output_format="csv"),
         random_seed=42,

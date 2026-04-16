@@ -85,7 +85,7 @@ class GeneratorConfig:
     rows_per_window: int
 
     # Temporal window configuration for row timestamp spread
-    pattern_window_size: float = 300.0  # In seconds (default 5 minutes)
+    time_window_size: float = 300.0  # In seconds (default 5 minutes)
 
     # Attributes
     attributes: List[AttributeConfig] = field(default_factory=list)
@@ -110,8 +110,8 @@ class GeneratorConfig:
         if self.rows_per_window <= 0:
             raise ValueError("rows_per_window must be positive")
 
-        if self.pattern_window_size <= 0:
-            raise ValueError("pattern_window_size must be positive")
+        if self.time_window_size <= 0:
+            raise ValueError("time_window_size must be positive")
 
         if self.total_rows % self.rows_per_window != 0:
             raise ValueError(

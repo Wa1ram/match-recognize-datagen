@@ -35,7 +35,7 @@ def create_example_config() -> GeneratorConfig:
         num_columns=5,
         batch_sizes=[10, 10, 10],
         rows_per_window=5,
-        pattern_window_size=30,
+        time_window_size=30,
         attributes=[
             AttributeConfig(
                 name="value",

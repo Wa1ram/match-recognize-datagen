@@ -2,7 +2,7 @@
 MATCH RECOGNIZE Synthetic Data Generator
 
 A Python library for generating synthetic data for MATCH RECOGNIZE queries
-with configurable pattern specifications, constraint definitions, and
+with configurable row-window generation, constraint definitions, and
 streaming batch output.
 """
 
@@ -12,13 +12,9 @@ __author__ = "Your Name"
 from .config import (
     GeneratorConfig,
     AttributeConfig,
-    PatternSpec,
-    PatternElement,
-    KleeneConfig,
     DefineSpec,
     IndependentCondition,
     DependentConditionPair,
-    WindowCondition,
     ComparisonOperator,
     AttributeType,
     DistributionType,
@@ -30,13 +26,9 @@ from .output import OutputWriter
 __all__ = [
     "GeneratorConfig",
     "AttributeConfig",
-    "PatternSpec",
-    "PatternElement",
-    "KleeneConfig",
     "DefineSpec",
     "IndependentCondition",
     "DependentConditionPair",
-    "WindowCondition",
     "ComparisonOperator",
     "AttributeType",
     "DistributionType",

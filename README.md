@@ -1,6 +1,6 @@
 # match-recognize-datagen
 
-Synthetic data generator for MATCH RECOGNIZE queries with pattern specifications and constraint definitions.
+Synthetic data generator for MATCH RECOGNIZE-style workloads with row-window generation and DEFINE constraint definitions.
 
 ## Quick Start
 
@@ -33,6 +33,8 @@ See `examples/examples.py` for more examples.
 This repository also includes an insertion-first generator API that models
 per-variable/per-column distributions as weighted rules (`exact` and `range`).
 
+Use this insertion-first API when you need explicit pattern variable modeling.
+
 Run the example:
 
 ```bash
@@ -44,8 +46,7 @@ distance constraints with retry-and-shortfall reporting.
 
 ## Features
 
-- **PATTERN clause**: Variables, wildcards, Kleene+ operators
-- **DEFINE clause**: Independent/pairwise/window conditions with selectivity
+- **DEFINE clause**: Independent and pairwise conditions with selectivity
 - **Flexible batching**: Configurable batch sizes and window constraints
 - **Output**: Parquet files per batch
 - **Distributions**: Uniform, Zipf, Normal for numerical attributes

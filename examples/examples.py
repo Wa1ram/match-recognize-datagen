@@ -2,10 +2,10 @@
 Example usage of MATCH RECOGNIZE synthetic data generator.
 
 This demonstrates how to:
-1. Define a PATTERN clause
+1. Configure table and batching parameters
 2. Define a DEFINE clause with conditions
 3. Generate synthetic data satisfying the constraints
-4. Output to Parquet files
+4. Output generated batches
 """
 
 from pathlib import Path
@@ -21,13 +21,9 @@ from match_recognize_datagen import (
     AttributeConfig,
     AttributeType,
     DistributionType,
-    PatternSpec,
-    PatternElement,
-    KleeneConfig,
     DefineSpec,
     IndependentCondition,
     DependentConditionPair,
-    WindowCondition,
     ComparisonOperator,
     DataGenerator,
 )
@@ -67,22 +63,21 @@ def example_basic_generation():
     print()
 
 
-def example_with_pattern():
-    """Example 2: Generation with PATTERN specification."""
-    print("Example 2: With PATTERN")
+def example_with_independent_conditions():
+    """Example 2: Generation with DEFINE independent conditions."""
+    print("Example 2: DEFINE Independent Conditions")
     print("-" * 50)
 
-    # Define pattern: V1 Z* V2+ Z* V3
-    # Where V2+ occurs at least once
-    pattern_spec = PatternSpec(
-        elements=[
-            PatternElement(variable_name="V1", is_kleene_plus=False),
-            PatternElement(variable_name="V2", is_kleene_plus=True),
-            PatternElement(variable_name="V3", is_kleene_plus=False),
-        ],
-        kleene_configs={
-            "V2": KleeneConfig(variable_name="V2", min_length=1, max_length=5)
-        },
+    define_spec = DefineSpec(
+        independent_conditions=[
+            IndependentCondition(
+                variable_name="V1",
+                attribute_name="signal",
+                operator=ComparisonOperator.GTE,
+                value=60.0,
+                selectivity=0.4,
+            )
+        ]
     )
 
     config = GeneratorConfig(
@@ -92,8 +87,7 @@ def example_with_pattern():
         batch_sizes=[200, 200, 200],
         rows_per_window=100,
         pattern_window_size=600.0,  # 100 rows spread over 600 seconds
-        pattern_spec=pattern_spec,
-        target_num_matches=50,
+        define_spec=define_spec,
         attributes=[
             AttributeConfig(
                 name="signal",
@@ -137,22 +131,13 @@ def example_with_conditions():
                 selectivity=0.6,
             ),
         ],
-        window_conditions=[
-            WindowCondition(
-                var1_name="V1",
-                var2_name="V2",
-                time_attr="timestamp",
-                max_time_diff=600,  # 10 minutes
-                selectivity=0.8,
-            ),
-        ],
     )
 
     config = GeneratorConfig(
-        initial_table_size=1500_000,
-        total_rows=7500_000,
+        initial_table_size=150_000,
+        total_rows=750_000,
         num_columns=5,
-        batch_sizes=[2000_000, 2000_000, 2000_000],
+        batch_sizes=[200_000, 200_000, 200_000],
         rows_per_window=75,
         pattern_window_size=450.0,  # 75 rows spread over 450 seconds
         define_spec=define_spec,
@@ -179,20 +164,9 @@ def example_with_conditions():
 
 
 def example_full_specification():
-    """Example 4: Full specification with both PATTERN and DEFINE."""
-    print("Example 4: Full Specification (PATTERN + DEFINE)")
+    """Example 4: DEFINE specification with independent and pairwise conditions."""
+    print("Example 4: Full DEFINE Specification")
     print("-" * 50)
-
-    pattern_spec = PatternSpec(
-        elements=[
-            PatternElement(variable_name="Start", is_kleene_plus=False),
-            PatternElement(variable_name="Middle", is_kleene_plus=True),
-            PatternElement(variable_name="End", is_kleene_plus=False),
-        ],
-        kleene_configs={
-            "Middle": KleeneConfig(variable_name="Middle", fixed_length=3)
-        },
-    )
 
     define_spec = DefineSpec(
         independent_conditions=[
@@ -211,6 +185,17 @@ def example_full_specification():
                 selectivity=0.5,
             ),
         ],
+        pairwise_conditions=[
+            DependentConditionPair(
+                var1_name="Start",
+                var2_name="End",
+                var1_attr="amount",
+                var2_attr="amount",
+                operator=ComparisonOperator.GT,
+                threshold=20.0,
+                selectivity=0.6,
+            ),
+        ],
     )
 
     config = GeneratorConfig(
@@ -220,9 +205,7 @@ def example_full_specification():
         batch_sizes=[250, 250, 250],
         rows_per_window=125,
         pattern_window_size=1200.0,  # 125 rows spread over 1200 seconds
-        pattern_spec=pattern_spec,
         define_spec=define_spec,
-        target_num_matches=100,
         attributes=[
             AttributeConfig(
                 name="amount",
@@ -247,7 +230,7 @@ def example_full_specification():
 
 if __name__ == "__main__":
     #example_basic_generation()
-    # example_with_pattern()
+    # example_with_independent_conditions()
     example_with_conditions()
     # example_full_specification()
     print("All examples completed!")

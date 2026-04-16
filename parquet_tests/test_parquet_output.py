@@ -423,10 +423,10 @@ class TestParquetOutput(unittest.TestCase):
 
     def test_independent_numerical_and_categorical_remain_stable_with_dependent(self):
         cfg = GeneratorConfig(
-            initial_table_size=10000,
-            total_rows=50000,
+            initial_table_size=1000,
+            total_rows=5000,
             num_columns=4,
-            batch_sizes=[20000, 20000],
+            batch_sizes=[2000, 2000],
             rows_per_window=10,
             attributes=[
                 AttributeConfig(

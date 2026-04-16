@@ -19,10 +19,9 @@ class DataGenerator:
     
     Workflow:
     1. Generate full table (initial + all batches)
-    2. Apply pattern constraints
-    3. Apply DEFINE conditions
-    4. Slice into separate batch files
-    5. Output to target format
+    2. Apply DEFINE conditions
+    3. Slice into separate batch files
+    4. Output to target format
     """
 
     def __init__(self, config: GeneratorConfig, seed: Optional[int] = None):
@@ -73,12 +72,12 @@ class DataGenerator:
             if attr.name == self.config.id_column_name:
                 row[attr.name] = row_id
             elif attr.name == self.config.timestamp_column_name:
-                # Generate timestamp based on pattern windows
-                # Each pattern window contains rows_per_window rows
+                # Generate timestamp based on configured temporal windows.
+                # Each window contains rows_per_window rows.
                 window_idx = (row_id - 1) // self.config.rows_per_window
                 pos_in_window = (row_id - 1) % self.config.rows_per_window
                 
-                # Distribute rows evenly within their pattern window
+                # Distribute rows evenly within each window.
                 window_start = window_idx * self.config.pattern_window_size
                 window_end = (window_idx + 1) * self.config.pattern_window_size
                 
@@ -161,10 +160,9 @@ class DataGenerator:
         
         Workflow:
         1. Generate full table
-        2. Apply pattern constraints
-        3. Apply DEFINE constraints
-        4. Slice into batches
-        5. Output to files
+        2. Apply DEFINE constraints
+        3. Slice into batches
+        4. Output to files
         """
         print(f"Generating {self.config.total_rows} rows across {len(self.config.batch_sizes)} batches...")
 

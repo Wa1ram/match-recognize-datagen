@@ -3,7 +3,7 @@ Configuration and data models for the MATCH RECOGNIZE synthetic data generator.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Literal, Optional, Tuple, Any
+from typing import List, Literal, Optional, Tuple, Any
 from enum import Enum
 
 
@@ -44,21 +44,6 @@ class AttributeConfig:
 
 
 @dataclass
-class KleeneConfig:
-    """Configuration for Kleene+ operator length."""
-    variable_name: str
-    # Fixed length mode
-    fixed_length: Optional[int] = None
-    # Variable length mode
-    min_length: Optional[int] = None
-    max_length: Optional[int] = None
-
-    def __post_init__(self):
-        if self.fixed_length is None and (self.min_length is None or self.max_length is None):
-            raise ValueError("Either fixed_length or (min_length, max_length) must be specified")
-
-
-@dataclass
 class IndependentCondition:
     """Independent condition per variable (e.g., Vi.val > 42)."""
     variable_name: str
@@ -81,35 +66,10 @@ class DependentConditionPair:
 
 
 @dataclass
-class WindowCondition:
-    """Window condition on variable pair (e.g., Vn.t - V1.t < 30 Mins)."""
-    var1_name: str
-    var2_name: str
-    time_attr: str = "timestamp"
-    max_time_diff: Optional[float] = None  # In time units (e.g., seconds, minutes)
-    selectivity: float = 0.5
-
-
-@dataclass
-class PatternElement:
-    """Element in a PATTERN specification."""
-    variable_name: str
-    is_kleene_plus: bool = False  # V+ operator
-
-
-@dataclass
-class PatternSpec:
-    """MATCH RECOGNIZE PATTERN clause specification."""
-    elements: List[PatternElement]  # V1 Z* V2 Z* ... Vn
-    kleene_configs: Dict[str, KleeneConfig] = field(default_factory=dict)
-
-
-@dataclass
 class DefineSpec:
     """MATCH RECOGNIZE DEFINE clause specification."""
     independent_conditions: List[IndependentCondition] = field(default_factory=list)
     pairwise_conditions: List[DependentConditionPair] = field(default_factory=list)
-    window_conditions: List[WindowCondition] = field(default_factory=list)
 
 
 @dataclass
@@ -124,7 +84,7 @@ class GeneratorConfig:
     batch_sizes: List[int]
     rows_per_window: int
 
-    # Pattern window configuration (temporal window for pattern matching)
+    # Temporal window configuration for row timestamp spread
     pattern_window_size: float = 300.0  # In seconds (default 5 minutes)
 
     # Attributes
@@ -132,10 +92,8 @@ class GeneratorConfig:
     id_column_name: str = "id"
     timestamp_column_name: str = "timestamp"
 
-    # Pattern and constraints
-    pattern_spec: Optional[PatternSpec] = None
+    # Constraints
     define_spec: Optional[DefineSpec] = None
-    target_num_matches: Optional[int] = None
 
     # Output
     output_format: Literal["parquet", "csv", "sql"] = "parquet"
